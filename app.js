@@ -4,7 +4,7 @@ const port = process.env.PORT || 3000;
 
 app.get("/", (req, res) => {
   res.send(`
-        <h1>me llamo roberto roboto!</h1>
+        <h1>distribuida s2!</h1>
         <p>Timestamp: ${new Date().toISOString()}</p>
     `);
 });
