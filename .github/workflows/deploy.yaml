@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   refresh-instances:
-    name: "Fast Update (Aggressive)"
+    name: "Smart & Aggressive Update"
     runs-on: ubuntu-latest
 
     steps:
@@ -26,21 +26,37 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: us-east-1
 
-      # VERSIÓN AGRESIVA:
-      # 1. MinHealthyPercentage = 0 (No espera a nadie, reemplaza todo de golpe)
-      # 2. InstanceWarmup = 0 (Asume que la instancia está lista apenas nace)
-      - name: Aggressive Instance Refresh
+      - name: Bulldozer Refresh Script
         run: |
           ASG_NAME="my-app-asg-v2"
 
-          echo "1. Cancelando cualquier proceso anterior..."
-          aws autoscaling cancel-instance-refresh --auto-scaling-group-name $ASG_NAME || true
+          echo "🔍 1. Verificando estado del ASG..."
 
-          # Esperamos solo un momento breve
-          sleep 5
+          # Intentamos cancelar, pero silenciamos el error si no hay nada que cancelar
+          aws autoscaling cancel-instance-refresh --auto-scaling-group-name $ASG_NAME 2>/dev/null || echo "   ℹ️ Nada que cancelar o ya se estaba cancelando."
 
-          echo "2. ¡Lanzando actualización AGRESIVA!"
-          # Al poner MinHealthyPercentage en 0, AWS no se bloquea esperando salud.
+          echo "⏳ 2. Esperando a que el ASG libere el bloqueo (Polling)..."
+
+          # Bucle de espera OBLIGATORIO para evitar el error "InstanceRefreshInProgress"
+          while true; do
+            # Obtenemos el estado del refresh más reciente
+            STATUS=$(aws autoscaling describe-instance-refreshes --auto-scaling-group-name $ASG_NAME \
+              --query 'InstanceRefreshes[0].Status' --output text)
+            
+            echo "   Estado actual detectado: $STATUS"
+            
+            # Si el estado es "None" (nunca hubo uno), "Successful", "Failed" o "Cancelled", estamos libres.
+            if [[ "$STATUS" == "None" || "$STATUS" == "Successful" || "$STATUS" == "Failed" || "$STATUS" == "Cancelled" ]]; then
+              echo "✅ El ASG está limpio y listo."
+              break
+            fi
+            
+            # Si sigue en Pending, InProgress, Cancelling o RollbackInProgess, esperamos.
+            echo "   🚧 El ASG sigue ocupado limpiando... Esperando 5 segundos..."
+            sleep 5
+          done
+
+          echo "🚀 3. ¡Lanzando actualización AGRESIVA (Sin esperas de salud)!"
           aws autoscaling start-instance-refresh \
             --auto-scaling-group-name $ASG_NAME \
             --preferences '{"MinHealthyPercentage": 0, "InstanceWarmup": 0}' \
