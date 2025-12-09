@@ -26,17 +26,35 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: us-east-1
 
-      # PASO BLINDADO: Cancela lo anterior -> Espera -> Lanza lo nuevo
-      - name: Force New Deployment (Refresh)
+      # BLOQUE INTELIGENTE: Bucle de espera hasta que el estado sea 'Cancelled' o 'Successful'
+      - name: Force New Deployment (Robust)
         run: |
-          echo "1. Cancelando cualquier actualización anterior trabada..."
-          # El '|| true' significa: "Si no hay nada que cancelar, no des error, sigue adelante"
-          aws autoscaling cancel-instance-refresh --auto-scaling-group-name my-app-asg-v2 || true
+          ASG_NAME="my-app-asg-v2"
 
-          echo "2. Esperando 10 segundos para que AWS limpie el estado..."
-          sleep 10
+          echo "1. Solicitando cancelación de procesos anteriores..."
+          aws autoscaling cancel-instance-refresh --auto-scaling-group-name $ASG_NAME || true
 
-          echo "3. Iniciando el despliegue del nuevo código..."
+          echo "2. Esperando a que el ASG quede totalmente libre..."
+
+          # Bucle infinito que chequea el estado cada 10 segundos
+          while true; do
+            # Obtenemos el estado del último refresh
+            STATUS=$(aws autoscaling describe-instance-refreshes --auto-scaling-group-name $ASG_NAME \
+              --query 'InstanceRefreshes[0].Status' --output text)
+            
+            echo "   Estado actual: $STATUS"
+            
+            # Si el estado es uno de los finales (Cancelled, Successful, Failed) o no hay nada (None), salimos del bucle.
+            if [[ "$STATUS" == "Cancelled" || "$STATUS" == "Successful" || "$STATUS" == "Failed" || "$STATUS" == "None" || "$STATUS" == "null" ]]; then
+              echo "✅ El ASG está libre."
+              break
+            fi
+            
+            echo "   ⏳ Aún ocupado ($STATUS)... esperando 10 segundos más..."
+            sleep 10
+          done
+
+          echo "3. Iniciando el nuevo refresh..."
           aws autoscaling start-instance-refresh \
-            --auto-scaling-group-name my-app-asg-v2 \
+            --auto-scaling-group-name $ASG_NAME \
             --preferences '{"MinHealthyPercentage": 50, "InstanceWarmup": 60}'
